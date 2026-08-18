@@ -1,0 +1,10 @@
+torch>=2.0
+torchvision>=0.15
+numpy
+pandas
+opencv-python-headless
+albumentations>=1.3
+scikit-learn
+matplotlib
+tabulate
+tqdm
