@@ -57,22 +57,59 @@ def build_dataframe(data_dir, num_classes=4):
 # --------------------------------------------------------------------------
 # 2) Stratified train / val / test bolme
 # --------------------------------------------------------------------------
-def split_dataframe(df, val_size=0.15, test_size=0.15, seed=42):
+def split_dataframe(df, val_size=0.15, test_size=0.15, seed=42, min_per_group=20):
+    """Stratified 70/15/15 bolme.
+
+    Severstal'da bazi kusur kombinasyonlari (orn. class1+class2 birlikte) cok nadir.
+    Bir grupta 3'ten az ornek varsa stratified split matematiksel olarak imkansiz
+    (her bolmeye en az 1 ornek dusmeli). Bu yuzden:
+      1. Nadir imzalari tek bir 'rare' kovasinda topluyoruz
+      2. Yine de yetmezse kusur SAYISINA gore stratify ediyoruz (daha kaba ama saglam)
+      3. O da olmazsa stratify olmadan rastgele boluyoruz
+    """
     from sklearn.model_selection import train_test_split
 
-    # Cok nadir kombinasyonlari 'rare' altinda topla ki stratify patlamasin
-    counts = df["signature"].value_counts()
-    rare = counts[counts < 10].index
-    strat = df["signature"].where(~df["signature"].isin(rare), "rare")
+    def _make_strata(threshold):
+        counts = df["signature"].value_counts()
+        rare = counts[counts < threshold].index
+        s = df["signature"].where(~df["signature"].isin(rare), "rare")
+        # 'rare' kovasi da 3'ten kucukse stratify yine patlar -> en yaygin imzaya kat
+        vc = s.value_counts()
+        tiny = vc[vc < 3].index
+        if len(tiny):
+            s = s.where(~s.isin(tiny), vc.idxmax())
+        return s
 
-    train_df, temp_df, strat_tr, strat_tmp = train_test_split(
-        df, strat, test_size=val_size + test_size, random_state=seed, stratify=strat)
-    rel = test_size / (val_size + test_size)
-    val_df, test_df = train_test_split(
-        temp_df, test_size=rel, random_state=seed, stratify=strat_tmp)
-    return (train_df.reset_index(drop=True),
-            val_df.reset_index(drop=True),
-            test_df.reset_index(drop=True))
+    candidates = [
+        ("signature", _make_strata(min_per_group)),
+        ("n_defects", df["n_defects"].astype(str)),
+        ("none", None),
+    ]
+
+    for name, strat in candidates:
+        try:
+            if strat is None:
+                train_df, temp_df = train_test_split(
+                    df, test_size=val_size + test_size, random_state=seed)
+                rel = test_size / (val_size + test_size)
+                val_df, test_df = train_test_split(temp_df, test_size=rel, random_state=seed)
+            else:
+                train_df, temp_df, _, strat_tmp = train_test_split(
+                    df, strat, test_size=val_size + test_size,
+                    random_state=seed, stratify=strat)
+                rel = test_size / (val_size + test_size)
+                val_df, test_df = train_test_split(
+                    temp_df, test_size=rel, random_state=seed, stratify=strat_tmp)
+            if name != "signature":
+                print(f"[bilgi] stratify stratejisi: '{name}' (imza bazli bolme mumkun olmadi)")
+            return (train_df.reset_index(drop=True),
+                    val_df.reset_index(drop=True),
+                    test_df.reset_index(drop=True))
+        except ValueError as e:
+            print(f"[bilgi] '{name}' ile stratify basarisiz ({e}); bir sonraki stratejiye geciliyor.")
+            continue
+
+    raise RuntimeError("Veri bolunemedi.")
 
 
 # --------------------------------------------------------------------------
